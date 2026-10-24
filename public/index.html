@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KBFC Score Predictor</title>
+    <meta name="description" content="Predict Kerala Blasters FC scores. One pick per match. Correct result is 3 points, exact score adds 5." />
+    <meta name="theme-color" content="#0b1020" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23f5c400'/%3E%3Ctext x='32' y='42' text-anchor='middle' font-family='Arial' font-size='26' font-weight='700' fill='%231436a0'%3EKB%3C/text%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="top">
+        <div class="brand">
+          <div class="crest" aria-hidden="true">KB</div>
+          <div>
+            <p class="eyebrow">ISL 2026/27 · Kerala Blasters</p>
+            <h1>Score Predictor</h1>
+          </div>
+        </div>
+        <div class="rules" aria-label="Scoring">
+          <span><b>3</b> correct result</span>
+          <span><b>+5</b> exact score</span>
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="Sections">
+        <button type="button" id="tab-matches" data-action="tab" data-tab="matches">Matches</button>
+        <button type="button" id="tab-board" data-action="tab" data-tab="board">Leaderboard</button>
+      </nav>
+
+      <p id="banner" class="banner" hidden></p>
+      <section id="identity"></section>
+      <main id="app">
+        <p class="loading">Loading fixtures…</p>
+      </main>
+
+      <footer>
+        <p>One prediction per mobile number, per match. Picks lock at kickoff. An exact score is 8 points: 3 for the result and 5 extra.</p>
+        <a href="/admin">Enter full-time scores</a>
+      </footer>
+    </div>
+    <noscript><p class="banner">Turn on JavaScript to predict scores.</p></noscript>
+    <script src="/app.js"></script>
+  </body>
+</html>

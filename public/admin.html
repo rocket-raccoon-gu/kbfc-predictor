@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>KBFC result desk</title>
+    <meta name="theme-color" content="#0b1020" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23f5c400'/%3E%3Ctext x='32' y='42' text-anchor='middle' font-family='Arial' font-size='26' font-weight='700' fill='%231436a0'%3EKB%3C/text%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="top">
+        <div class="brand">
+          <div class="crest" aria-hidden="true">KB</div>
+          <div>
+            <p class="eyebrow">Result desk</p>
+            <h1>Full-time scores</h1>
+          </div>
+        </div>
+      </header>
+      <p id="banner" class="banner" hidden></p>
+      <section id="lock" class="card identity">
+        <label>
+          Admin PIN
+          <input id="pin" type="password" autocomplete="current-password" placeholder="PIN" />
+        </label>
+        <button type="button" id="unlock" class="btn">Unlock</button>
+      </section>
+      <main id="app"></main>
+      <footer>
+        <a href="/">Back to predictions</a>
+      </footer>
+    </div>
+    <script src="/admin.js"></script>
+  </body>
+</html>

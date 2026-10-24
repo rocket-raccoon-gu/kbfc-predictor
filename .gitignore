@@ -1,0 +1,11 @@
+node_modules
+.wrangler
+.dev.vars
+dist
+*.log
+wiki.html
+kbfc-logo.html
+clubs.html
+tmp-*.mjs
+tmp-*.html
+public/logos/test.png

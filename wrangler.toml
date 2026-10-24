@@ -1,0 +1,20 @@
+name = "kbfc-score-predictor"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+
+# Change this PIN before sharing the project publicly.
+# `wrangler secret put ADMIN_PIN` overrides this value.
+[vars]
+ADMIN_PIN = "kbfc-2026"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "kbfc-predictor"
+database_id = "00000000-0000-0000-0000-000000000001"
+migrations_dir = "migrations"
