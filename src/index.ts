@@ -16,6 +16,7 @@ type MatchRow = {
   kickoff: string;
   kbfc_score: number | null;
   opponent_score: number | null;
+  publish_at?: string | null;
 };
 
 type PickRow = {
@@ -41,6 +42,7 @@ const OPPONENT_LOGOS: Record<string, string> = {
   "Bengaluru FC": "/logos/bengaluru.svg",
   "Mohun Bagan Super Giant": "/logos/mohun-bagan.svg",
   "East Bengal FC": "/logos/east-bengal.svg",
+  "Sample FC": "/logos/sample.svg",
 };
 
 const jsonHeaders = {
@@ -106,7 +108,7 @@ async function bootstrap(env: Env, rawPhone: string, rawCountry = ""): Promise<R
 
   const now = Date.now();
   const matchViews = matches.map((match) => {
-    const final = hasResult(match);
+    const final = hasResult(match, now);
     const status = matchStatus(match, matches, now);
     const pick = picks.get(match.id);
     let myPick: {
@@ -145,8 +147,9 @@ async function bootstrap(env: Env, rawPhone: string, rawCountry = ""): Promise<R
       kbfcLogo: KBFC_LOGO,
       opponentLogo: OPPONENT_LOGOS[match.opponent] ?? "",
       status,
-      kbfcScore: match.kbfc_score,
-      opponentScore: match.opponent_score,
+      kbfcScore: final ? match.kbfc_score : null,
+      opponentScore: final ? match.opponent_score : null,
+      publishLabel: match.publish_at && !final ? formatClock(match.publish_at) : null,
       myPick,
     };
   });
@@ -275,7 +278,7 @@ async function saveResult(env: Env, body: Record<string, unknown> | null): Promi
 }
 
 async function buildBoards(env: Env, matches: MatchRow[], viewerPhone: string) {
-  const finalMatches = matches.filter(hasResult);
+  const finalMatches = matches.filter((match) => hasResult(match));
   const picks = finalMatches.length
     ? await env.DB.prepare(
         `SELECT u.name AS name, u.phone AS phone, p.match_id AS match_id,
@@ -415,8 +418,10 @@ function isChecked(value: unknown): boolean {
   return value === true || value === 1 || value === "1" || value === "true";
 }
 
-function hasResult(match: MatchRow): boolean {
-  return match.kbfc_score !== null && match.opponent_score !== null;
+function hasResult(match: MatchRow, now = Date.now()): boolean {
+  if (match.kbfc_score === null || match.opponent_score === null) return false;
+  if (match.publish_at && Date.parse(match.publish_at) > now) return false;
+  return true;
 }
 
 const PREDICT_CUTOFF_MS = 60 * 1000;
@@ -426,9 +431,9 @@ function closesAt(kickoff: string): number {
 }
 
 function matchStatus(match: MatchRow, matches: MatchRow[], now: number): "final" | "locked" | "open" | "upcoming" {
-  if (hasResult(match)) return "final";
+  if (hasResult(match, now)) return "final";
   if (now >= closesAt(match.kickoff)) return "locked";
-  const next = matches.find((item) => !hasResult(item) && now < closesAt(item.kickoff));
+  const next = matches.find((item) => !hasResult(item, now) && now < closesAt(item.kickoff));
   return next?.id === match.id ? "open" : "upcoming";
 }
 

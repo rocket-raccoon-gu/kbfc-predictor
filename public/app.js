@@ -156,7 +156,10 @@ function renderMatchBody(match) {
     `;
   }
   if (match.status === "locked") {
-    return `<p class="muted">Kickoff has passed. Predictions are closed.</p>`;
+    const waiting = match.publishLabel
+      ? `Predictions are closed. The full-time score publishes at ${esc(match.publishLabel)} Qatar time.`
+      : "Kickoff has passed. Predictions are closed.";
+    return `<p class="muted">${waiting}</p>`;
   }
   if (match.status !== "open") {
     return `<p class="muted">Predictions open when this is the next match.</p>`;
