@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN whatsapp_member INTEGER NOT NULL DEFAULT 0;

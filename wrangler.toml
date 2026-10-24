@@ -16,5 +16,5 @@ ADMIN_PIN = "kbfc-2026"
 [[d1_databases]]
 binding = "DB"
 database_name = "kbfc-predictor"
-database_id = "00000000-0000-0000-0000-000000000001"
+database_id = "6074f6d3-17f5-43eb-a12b-d8ff6032657b"
 migrations_dir = "migrations"

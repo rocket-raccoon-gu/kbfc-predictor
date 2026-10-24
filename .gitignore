@@ -2,6 +2,7 @@ node_modules
 .wrangler
 .dev.vars
 dist
+dist-pages
 *.log
 wiki.html
 kbfc-logo.html

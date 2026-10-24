@@ -27,12 +27,16 @@ test("wrong result is 0 points", () => {
   assert.equal(scored.correct, false);
 });
 
-test("phone numbers accept spaces and a 91 prefix", () => {
-  assert.equal(normalizePhone("98765 43210"), "9876543210");
-  assert.equal(normalizePhone("+91 98765 43210"), "9876543210");
-  assert.equal(normalizePhone("09876543210"), "9876543210");
-  assert.equal(normalizePhone("12345"), null);
-  assert.equal(normalizePhone("5876543210"), null);
+test("only Qatar numbers with +974 are accepted", () => {
+  assert.equal(normalizePhone("5015 4119", "974"), "97450154119");
+  assert.equal(normalizePhone("+974 5015 4119", "+974"), "97450154119");
+  assert.equal(normalizePhone("50154119"), "97450154119");
+  assert.equal(normalizePhone("97450154119"), "97450154119");
+  assert.equal(normalizePhone("050154119", "974"), "97450154119");
+  assert.equal(normalizePhone("9876543210", "91"), null);
+  assert.equal(normalizePhone("+91 98765 43210", "91"), null);
+  assert.equal(normalizePhone("12345", "974"), null);
+  assert.equal(normalizePhone("12", "1"), null);
 });
 
 test("names are required for new predictors", () => {

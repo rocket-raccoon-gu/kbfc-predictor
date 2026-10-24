@@ -26,15 +26,21 @@ type PickRow = {
   po: number;
 };
 
-const KBFC_LOGO = "https://www.indiansuperleague.com/static-assets/images/club/498.png?v=103.48";
+const KBFC_LOGO = "/kbfc.png";
 
 const OPPONENT_LOGOS: Record<string, string> = {
-  "Inter Kashi": "https://www.indiansuperleague.com/static-assets/images/club/2354.png?v=103.48",
-  "NorthEast United": "https://www.indiansuperleague.com/static-assets/images/club/504.png?v=103.48",
-  "Mumbai City": "https://www.indiansuperleague.com/static-assets/images/club/506.png?v=103.48",
-  "Chennaiyin FC": "https://www.indiansuperleague.com/static-assets/images/club/505.png?v=103.48",
-  "FC Goa": "https://www.indiansuperleague.com/static-assets/images/club/496.png?v=103.48",
-  "Churchill Brothers": "https://www.indiansuperleague.com/static-assets/images/club/1101.png?v=103.48",
+  "Inter Kashi": "/logos/inter-kashi.webp",
+  "NorthEast United": "/logos/northeast-united.webp",
+  "Mumbai City": "/logos/mumbai-city.webp",
+  "Chennaiyin FC": "/logos/chennaiyin.webp",
+  "FC Goa": "/logos/fc-goa.png",
+  "Churchill Brothers": "/logos/churchill-brothers.png",
+  "SC Delhi": "/logos/sc-delhi.svg",
+  "Punjab FC": "/logos/punjab.svg",
+  "Odisha FC": "/logos/odisha.svg",
+  "Bengaluru FC": "/logos/bengaluru.svg",
+  "Mohun Bagan Super Giant": "/logos/mohun-bagan.svg",
+  "East Bengal FC": "/logos/east-bengal.svg",
 };
 
 const jsonHeaders = {
@@ -62,10 +68,10 @@ export default {
 
 async function handleApi(request: Request, env: Env, url: URL): Promise<Response> {
   if (url.pathname === "/api/bootstrap" && request.method === "GET") {
-    return bootstrap(env, url.searchParams.get("phone") ?? "");
+    return bootstrap(env, url.searchParams.get("phone") ?? "", url.searchParams.get("country") ?? "");
   }
   if (url.pathname === "/api/user" && request.method === "GET") {
-    return lookupUser(env, url.searchParams.get("phone") ?? "");
+    return lookupUser(env, url.searchParams.get("phone") ?? "", url.searchParams.get("country") ?? "");
   }
   if (url.pathname === "/api/predict" && request.method === "POST") {
     return predict(env, await readJson(request));
@@ -83,8 +89,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   return err(404, "Not found.");
 }
 
-async function bootstrap(env: Env, rawPhone: string): Promise<Response> {
-  const phone = normalizePhone(rawPhone);
+async function bootstrap(env: Env, rawPhone: string, rawCountry = ""): Promise<Response> {
+  const phone = normalizePhone(rawPhone, rawCountry);
   const user = phone ? await findUser(env, phone) : null;
   const matches = await listMatches(env);
   const picks = new Map<string, { kbfc_score: number; opponent_score: number }>();
@@ -133,6 +139,8 @@ async function bootstrap(env: Env, rawPhone: string): Promise<Response> {
       home: match.is_home === 1,
       kickoff: match.kickoff,
       kickoffLabel: formatKickoff(match.kickoff),
+      closesAt: new Date(closesAt(match.kickoff)).toISOString(),
+      closeLabel: formatClock(new Date(closesAt(match.kickoff)).toISOString()),
       fixture: fixtureName(match),
       kbfcLogo: KBFC_LOGO,
       opponentLogo: OPPONENT_LOGOS[match.opponent] ?? "",
@@ -145,15 +153,15 @@ async function bootstrap(env: Env, rawPhone: string): Promise<Response> {
 
   const boards = await buildBoards(env, matches, phone ?? "");
   return json({
-    user: user ? { name: user.name, phoneMask: maskPhone(user.phone) } : null,
+    user: user ? { name: user.name, phoneMask: maskPhone(user.phone), member: user.whatsapp_member === 1 } : null,
     matches: matchViews,
     leaderboard: boards.leaderboard,
     matchBoards: boards.matchBoards,
   });
 }
 
-async function lookupUser(env: Env, rawPhone: string): Promise<Response> {
-  const phone = normalizePhone(rawPhone);
+async function lookupUser(env: Env, rawPhone: string, rawCountry = ""): Promise<Response> {
+  const phone = normalizePhone(rawPhone, rawCountry);
   if (!phone) return json({ exists: false });
   const user = await findUser(env, phone);
   if (!user) return json({ exists: false });
@@ -162,12 +170,12 @@ async function lookupUser(env: Env, rawPhone: string): Promise<Response> {
 
 async function predict(env: Env, body: Record<string, unknown> | null): Promise<Response> {
   if (!body) return err(400, "Enter a score to predict.");
-  const phone = normalizePhone(String(body.phone ?? ""));
+  const phone = normalizePhone(String(body.phone ?? ""), String(body.countryCode ?? ""));
   const kbfcScore = parseScore(body.kbfcScore);
   const opponentScore = parseScore(body.opponentScore);
   const matchId = String(body.matchId ?? "");
 
-  if (!phone) return err(400, "Enter a valid 10-digit mobile number.");
+  if (!phone) return err(400, "Only Qatar numbers can predict. Use +974 and an 8-digit mobile number.");
   if (!/^[a-z0-9-]{1,40}$/.test(matchId)) return err(400, "Pick a match first.");
   if (kbfcScore === null || opponentScore === null) {
     return err(400, "Enter both scores as whole numbers from 0 to 20.");
@@ -180,14 +188,18 @@ async function predict(env: Env, body: Record<string, unknown> | null): Promise<
   if (status === "upcoming") return err(403, "Predictions open when this is the next match.");
   if (status !== "open") return err(403, "Predictions are closed for this match.");
 
+  const member = isChecked(body.member);
   const existing = await findUser(env, phone);
   let name = existing?.name ?? "";
   if (!existing) {
     const cleaned = cleanName(String(body.name ?? ""));
     if (!cleaned) return err(400, "Add your name. New predictors only do this once.");
+    if (!member) return err(400, "Confirm you are in the Manjappada Qatar WhatsApp group.");
     name = cleaned;
     try {
-      await env.DB.prepare("INSERT INTO users (phone, name, created_at) VALUES (?, ?, ?)")
+      await env.DB.prepare(
+        "INSERT INTO users (phone, name, created_at, whatsapp_member) VALUES (?, ?, ?, 1)",
+      )
         .bind(phone, name, new Date().toISOString())
         .run();
     } catch (error) {
@@ -195,19 +207,23 @@ async function predict(env: Env, body: Record<string, unknown> | null): Promise<
       const winner = await findUser(env, phone);
       if (!winner) throw error;
       name = winner.name;
+      if (winner.whatsapp_member !== 1) await markMember(env, phone);
     }
+  } else if (existing.whatsapp_member !== 1) {
+    if (!member) return err(400, "Confirm you are in the Manjappada Qatar WhatsApp group.");
+    await markMember(env, phone);
   }
 
-  try {
-    await env.DB.prepare(
-      "INSERT INTO predictions (phone, match_id, kbfc_score, opponent_score, created_at) VALUES (?, ?, ?, ?, ?)",
-    )
-      .bind(phone, matchId, kbfcScore, opponentScore, new Date().toISOString())
-      .run();
-  } catch (error) {
-    if (isUniqueError(error)) return err(409, "You already predicted this match.");
-    throw error;
-  }
+  await env.DB.prepare(
+    `INSERT INTO predictions (phone, match_id, kbfc_score, opponent_score, created_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(phone, match_id) DO UPDATE SET
+       kbfc_score = excluded.kbfc_score,
+       opponent_score = excluded.opponent_score,
+       created_at = excluded.created_at`,
+  )
+    .bind(phone, matchId, kbfcScore, opponentScore, new Date().toISOString())
+    .run();
 
   return json({ ok: true, name, phone, phoneMask: maskPhone(phone) });
 }
@@ -276,12 +292,17 @@ async function buildBoards(env: Env, matches: MatchRow[], viewerPhone: string) {
   const rowsByMatch = new Map<string, Array<{
     name: string;
     phone: string;
-    kbfcScore: number;
-    opponentScore: number;
+    kbfcScore: number | null;
+    opponentScore: number | null;
     points: number;
     exact: boolean;
+    predicted: boolean;
   }>>();
 
+  const everyone = await env.DB.prepare("SELECT phone, name FROM users").all<{ phone: string; name: string }>();
+  for (const user of everyone.results) {
+    season.set(user.phone, { name: user.name, phone: user.phone, points: 0, exact: 0, played: 0 });
+  }
   for (const match of finalMatches) rowsByMatch.set(match.id, []);
   const matchById = new Map(finalMatches.map((match) => [match.id, match]));
 
@@ -297,14 +318,38 @@ async function buildBoards(env: Env, matches: MatchRow[], viewerPhone: string) {
     agg.exact += scored.exact ? 1 : 0;
     agg.played += 1;
     season.set(pick.phone, agg);
-    rowsByMatch.get(pick.match_id)?.push({
-      name: pick.name,
-      phone: pick.phone,
+    const board = rowsByMatch.get(pick.match_id);
+    if (board) {
+      board.push({
+        name: pick.name,
+        phone: pick.phone,
+        kbfcScore: pick.pk,
+        opponentScore: pick.po,
+        points: scored.points,
+        exact: scored.exact,
+        predicted: true,
+      });
+    }
+  }
+
+  const allPicks = await env.DB.prepare(
+    "SELECT phone, match_id, kbfc_score AS pk, opponent_score AS po FROM predictions",
+  ).all<{ phone: string; match_id: string; pk: number; po: number }>();
+  const picksByPhone = new Map<string, Array<{ kickoff: string; fixture: string; home: boolean; shortName: string; kbfcScore: number; opponentScore: number }>>();
+  const matchLookup = new Map(matches.map((match) => [match.id, match]));
+  for (const pick of allPicks.results) {
+    const match = matchLookup.get(pick.match_id);
+    if (!match) continue;
+    const list = picksByPhone.get(pick.phone) ?? [];
+    list.push({
+      kickoff: match.kickoff,
+      fixture: fixtureName(match),
+      home: match.is_home === 1,
+      shortName: match.short_name,
       kbfcScore: pick.pk,
       opponentScore: pick.po,
-      points: scored.points,
-      exact: scored.exact,
     });
+    picksByPhone.set(pick.phone, list);
   }
 
   const leaderboard = [...season.values()]
@@ -312,22 +357,28 @@ async function buildBoards(env: Env, matches: MatchRow[], viewerPhone: string) {
     .map((row, index) => ({
       rank: index + 1,
       name: row.name,
+      phoneEnd: row.phone.slice(-3),
       points: row.points,
       exact: row.exact,
       played: row.played,
       mine: row.phone === viewerPhone,
+      picks: (picksByPhone.get(row.phone) ?? [])
+        .sort((a, b) => a.kickoff.localeCompare(b.kickoff))
+        .map(({ kickoff: _kickoff, ...pick }) => pick),
     }));
 
   const matchBoards = finalMatches.map((match) => {
     const rows = (rowsByMatch.get(match.id) ?? [])
-      .sort((a, b) => b.points - a.points || a.name.localeCompare(b.name))
+      .sort((a, b) => b.points - a.points || Number(b.predicted) - Number(a.predicted) || a.name.localeCompare(b.name))
       .map((row, index) => ({
         rank: index + 1,
         name: row.name,
+        phoneEnd: row.phone.slice(-3),
         kbfcScore: row.kbfcScore,
         opponentScore: row.opponentScore,
         points: row.points,
         exact: row.exact,
+        predicted: row.predicted,
         mine: row.phone === viewerPhone,
       }));
     return {
@@ -350,20 +401,34 @@ async function listMatches(env: Env): Promise<MatchRow[]> {
   return result.results;
 }
 
-async function findUser(env: Env, phone: string): Promise<{ phone: string; name: string } | null> {
-  return env.DB.prepare("SELECT phone, name FROM users WHERE phone = ?")
+async function findUser(env: Env, phone: string): Promise<{ phone: string; name: string; whatsapp_member: number } | null> {
+  return env.DB.prepare("SELECT phone, name, whatsapp_member FROM users WHERE phone = ?")
     .bind(phone)
-    .first<{ phone: string; name: string }>();
+    .first<{ phone: string; name: string; whatsapp_member: number }>();
+}
+
+async function markMember(env: Env, phone: string): Promise<void> {
+  await env.DB.prepare("UPDATE users SET whatsapp_member = 1 WHERE phone = ?").bind(phone).run();
+}
+
+function isChecked(value: unknown): boolean {
+  return value === true || value === 1 || value === "1" || value === "true";
 }
 
 function hasResult(match: MatchRow): boolean {
   return match.kbfc_score !== null && match.opponent_score !== null;
 }
 
+const PREDICT_CUTOFF_MS = 60 * 1000;
+
+function closesAt(kickoff: string): number {
+  return Date.parse(kickoff) - PREDICT_CUTOFF_MS;
+}
+
 function matchStatus(match: MatchRow, matches: MatchRow[], now: number): "final" | "locked" | "open" | "upcoming" {
   if (hasResult(match)) return "final";
-  if (now >= Date.parse(match.kickoff)) return "locked";
-  const next = matches.find((item) => !hasResult(item) && now < Date.parse(item.kickoff));
+  if (now >= closesAt(match.kickoff)) return "locked";
+  const next = matches.find((item) => !hasResult(item) && now < closesAt(item.kickoff));
   return next?.id === match.id ? "open" : "upcoming";
 }
 
@@ -373,7 +438,7 @@ function fixtureName(match: { opponent: string; is_home: number }): string {
 
 function formatKickoff(iso: string): string {
   const formatted = new Intl.DateTimeFormat("en-IN", {
-    timeZone: "Asia/Kolkata",
+    timeZone: "Asia/Qatar",
     weekday: "short",
     day: "numeric",
     month: "short",
@@ -381,7 +446,16 @@ function formatKickoff(iso: string): string {
     minute: "2-digit",
     hour12: true,
   }).format(new Date(iso));
-  return `${formatted} IST`;
+  return `${formatted} Qatar time`;
+}
+
+function formatClock(iso: string): string {
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Qatar",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(new Date(iso));
 }
 
 function assertPin(request: Request, env: Env): Response | null {

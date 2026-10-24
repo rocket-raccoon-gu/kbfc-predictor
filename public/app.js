@@ -2,12 +2,17 @@ const STORAGE_KEY = "kbfc-phone";
 
 let state = null;
 let tab = "matches";
+let showMatchBoards = false;
+const openPicks = new Set();
 let draftPhone = "";
+let draftCountry = "+974";
 let draftName = "";
+let draftMember = false;
 let saving = false;
-let pending = null;
 let lookupGen = 0;
 let lastLookup = "";
+let timerHandle = 0;
+const editing = {};
 const draftScores = {};
 
 const app = document.getElementById("app");
@@ -34,12 +39,14 @@ async function load() {
 function render() {
   document.getElementById("tab-matches").classList.toggle("active", tab === "matches");
   document.getElementById("tab-board").classList.toggle("active", tab === "board");
+  identity.hidden = tab !== "matches";
   renderIdentity();
   app.innerHTML = tab === "matches" ? renderMatches() : renderBoard();
+  startTimer();
 }
 
 function renderIdentity() {
-  const key = state.user ? `u:${state.user.name}:${state.user.phoneMask}` : "guest";
+  const key = state.user ? `u:${state.user.name}:${state.user.phoneMask}:${state.user.member ? 1 : 0}` : "guest";
   if (identity.dataset.key === key) return;
   identity.dataset.key = key;
   if (state.user) {
@@ -50,24 +57,44 @@ function renderIdentity() {
         <p>Predicting as ${esc(state.user.phoneMask)}. One pick per match.</p>
       </div>
       <button type="button" class="ghost" data-action="switch">Switch number</button>
+      ${state.user.member ? "" : memberCheck()}
     `;
     return;
   }
   identity.className = "identity";
   identity.innerHTML = `
     <label>Mobile number
-      <input id="phone" type="text" inputmode="numeric" autocomplete="tel" maxlength="16" placeholder="10-digit mobile" value="${esc(draftPhone)}" />
+      <span class="phone-row">
+        <input id="country" type="text" value="+974" readonly tabindex="-1" aria-readonly="true" aria-label="Country code, locked to Qatar" />
+        <input id="phone" type="text" inputmode="tel" autocomplete="tel-national" maxlength="16" placeholder="5015 4119" value="${esc(draftPhone)}" />
+      </span>
     </label>
     <label id="name-wrap">Name
       <input id="name" type="text" autocomplete="name" maxlength="40" placeholder="Your name" value="${esc(draftName)}" />
     </label>
-    <p id="identity-note">New predictors add a name and mobile once. If this number has predicted before, only the score is needed.</p>
+    ${memberCheck()}
+    <p id="identity-note" hidden></p>
+  `;
+}
+
+function memberCheck() {
+  return `
+    <label class="member-check">
+      <input id="whatsapp-member" type="checkbox" ${draftMember ? "checked" : ""} />
+      <span>Are you a member of the Manjappada Qatar WhatsApp group?</span>
+    </label>
   `;
 }
 
 function renderMatches() {
   if (!state.matches.length) return `<p class="empty">No matches yet.</p>`;
-  return state.matches.map(renderMatch).join("");
+  const rank = { open: 0, upcoming: 1, locked: 2, final: 3 };
+  const matches = [...state.matches].sort((a, b) => {
+    const byStatus = (rank[a.status] ?? 9) - (rank[b.status] ?? 9);
+    if (byStatus !== 0) return byStatus;
+    return new Date(a.kickoff) - new Date(b.kickoff);
+  });
+  return matches.map(renderMatch).join("");
 }
 
 function renderMatch(match) {
@@ -79,7 +106,8 @@ function renderMatch(match) {
         <span class="pill ${match.home ? "home" : "away"}">${place}</span>
         <span class="pill ${match.status}">${labels[match.status] || "Closed"}</span>
       </div>
-      <p class="when">${esc(match.kickoffLabel)}${countdown(match)}</p>
+      <p class="when">${esc(match.kickoffLabel)}</p>
+      ${match.status === "open" ? timerBlock(match) : ""}
       ${crestRow(match)}
       <h2 class="fixture">${esc(match.fixture)}</h2>
       <p class="venue">${esc(match.venue)}</p>
@@ -102,7 +130,11 @@ function logo(src, alt) {
 function renderMatchBody(match) {
   if (match.status === "final") {
     const mine = match.myPick
-      ? `<p class="points ${match.myPick.points > 0 ? "good" : "zero"}">Your pick ${match.myPick.kbfcScore}–${match.myPick.opponentScore} · ${pointsLabel(match.myPick)}</p>`
+      ? `<div class="your-pick">
+          <div class="muted">Your prediction</div>
+          <strong>${scoreLine(match, match.myPick.kbfcScore, match.myPick.opponentScore)}</strong>
+          <p class="points ${match.myPick.points > 0 ? "good" : "zero"}">${pointsLabel(match.myPick)}</p>
+        </div>`
       : `<p class="muted">You did not predict this match.</p>`;
     return `
       <div class="final-score">
@@ -112,12 +144,14 @@ function renderMatchBody(match) {
       </div>
     `;
   }
-  if (match.myPick) {
+  if (match.myPick && !(match.status === "open" && editing[match.id])) {
+    const canEdit = match.status === "open";
     return `
       <div class="locked">
-        <div class="muted">Your prediction is locked</div>
-        <strong>Blasters ${match.myPick.kbfcScore} – ${match.myPick.opponentScore} ${esc(match.shortName)}</strong>
-        <p class="muted">${match.status === "locked" ? "Points land here after the full-time score is added." : "This cannot be changed."}</p>
+        <div class="muted">${canEdit ? "Your prediction" : "Your prediction is locked"}</div>
+        <strong>${scoreLine(match, match.myPick.kbfcScore, match.myPick.opponentScore)}</strong>
+        <p class="muted">${canEdit ? "You can change this until predictions close." : "Points land here after the full-time score is added."}</p>
+        ${canEdit ? `<button type="button" class="ghost edit-prediction" data-action="edit" data-match="${esc(match.id)}">Edit prediction</button>` : ""}
       </div>
     `;
   }
@@ -139,7 +173,7 @@ function renderMatchBody(match) {
         ${stepper(match.id, "opp", scores.opp)}
       </div>
     </div>
-    <button type="button" class="btn" data-action="predict" data-match="${esc(match.id)}">Lock in prediction</button>
+    <button type="button" class="btn" data-action="predict" data-match="${esc(match.id)}">${match.myPick ? "Update prediction" : "Lock in prediction"}</button>
   `;
 }
 
@@ -156,27 +190,37 @@ function stepper(id, side, value) {
 function renderBoard() {
   const season = state.leaderboard.length
     ? `<div class="lb-head"><span>#</span><span>Name</span><span></span><span>Pts</span></div>` +
-      state.leaderboard.map((row) => `
-        <div class="lb-row ${row.mine ? "mine" : ""}">
-          <span class="rank">${row.rank}</span>
-          <span>${esc(row.name)}<span class="pick-line">${row.exact} exact · ${row.played} played</span></span>
-          <span></span>
-          <span class="pts">${row.points}</span>
-        </div>
-      `).join("")
-    : `<p class="empty">No points yet. Exact score is 8 points. The right result only is 3.</p>`;
+      state.leaderboard.map((row) => {
+        const key = `${row.name}|${row.phoneEnd}`;
+        const open = openPicks.has(key);
+        const detail = open
+          ? `<div class="user-picks">${row.picks?.length
+            ? row.picks.map((pick) => `<p><span>${esc(pick.fixture)}</span><b>${scoreLine(pick, pick.kbfcScore, pick.opponentScore)}</b></p>`).join("")
+            : `<p>No prediction yet.</p>`}</div>`
+          : "";
+        return `
+          <button type="button" class="lb-row ${row.mine ? "mine" : ""} ${open ? "open" : ""}" data-action="user-pick" data-user="${esc(key)}" aria-expanded="${open}">
+            <span class="rank">${row.rank}</span>
+            <span>${esc(row.name)}<span class="phone-tail">···${esc(row.phoneEnd)}</span><span class="pick-line">${row.exact} exact · ${row.played} played</span></span>
+            <span></span>
+            <span class="pts">${row.points}</span>
+          </button>
+          ${detail}
+        `;
+      }).join("")
+    : `<p class="empty">No predictors yet. 3 points for the result and 5 points for an exact score.</p>`;
 
   const matches = state.matchBoards.map((board) => {
     const rows = board.rows.length
       ? board.rows.map((row) => `
           <div class="lb-row ${row.mine ? "mine" : ""}">
             <span class="rank">${row.rank}</span>
-            <span>${esc(row.name)}<span class="pick-line">Blasters ${row.kbfcScore}–${row.opponentScore} ${esc(board.opponent)}</span></span>
+            <span>${esc(row.name)}<span class="phone-tail">···${esc(row.phoneEnd)}</span><span class="pick-line">${row.predicted ? `Blasters ${row.kbfcScore}–${row.opponentScore} ${esc(board.opponent)}` : "No prediction"}</span></span>
             <span></span>
             <span class="pts">${row.points}</span>
           </div>
         `).join("")
-      : `<p class="empty">No predictions were locked in.</p>`;
+      : `<p class="empty">Nobody predicted this match.</p>`;
     return `
       <section class="card">
         <div class="board-title">
@@ -188,12 +232,17 @@ function renderBoard() {
     `;
   }).join("");
 
+  const toggle = state.matchBoards.length
+    ? `<button type="button" class="ghost board-toggle" data-action="match-boards">${showMatchBoards ? "Hide match leaderboards" : "View match leaderboards"}</button>`
+    : "";
+
   return `
     <section class="card">
-      <div class="board-title"><h2>Season</h2></div>
+      <div class="board-title"><h2>Season 13</h2></div>
       ${season}
+      ${toggle}
     </section>
-    ${matches}
+    ${showMatchBoards ? matches : ""}
   `;
 }
 
@@ -206,10 +255,22 @@ async function onClick(event) {
     showBanner("");
     render();
   }
+  if (action === "match-boards") {
+    showMatchBoards = !showMatchBoards;
+    render();
+  }
+  if (action === "user-pick") {
+    const key = target.dataset.user;
+    if (openPicks.has(key)) openPicks.delete(key);
+    else openPicks.add(key);
+    render();
+  }
   if (action === "switch") {
     localStorage.removeItem(STORAGE_KEY);
     draftPhone = "";
+    draftCountry = "+974";
     draftName = "";
+    draftMember = false;
     lastLookup = "";
     identity.dataset.key = "";
     await load();
@@ -222,6 +283,14 @@ async function onClick(event) {
     const input = app.querySelector(`.score-input[data-match="${cssEscape(id)}"][data-side="${side}"]`);
     if (input) input.value = String(next);
   }
+  if (action === "edit") {
+    const id = target.dataset.match;
+    const match = state.matches.find((item) => item.id === id);
+    if (!match?.myPick) return;
+    draftScores[id] = { kbfc: String(match.myPick.kbfcScore), opp: String(match.myPick.opponentScore) };
+    editing[id] = true;
+    render();
+  }
   if (action === "predict") {
     await submitPrediction(target.dataset.match, target);
   }
@@ -231,9 +300,10 @@ function onInput(event) {
   const target = event.target;
   if (target.id === "phone") {
     draftPhone = target.value;
-    lookupPhone(target.value);
+    lookupPhone();
   }
   if (target.id === "name") draftName = target.value;
+  if (target.id === "whatsapp-member") draftMember = target.checked;
   if (target.classList.contains("score-input")) {
     const next = clamp(target.value);
     scoreOf(target.dataset.match)[target.dataset.side] = String(next);
@@ -241,21 +311,26 @@ function onInput(event) {
   }
 }
 
-async function lookupPhone(raw) {
-  const phone = normalizePhone(raw);
+async function lookupPhone() {
+  const country = currentCountry();
+  const national = currentPhone();
+  const phone = normalizePhone(national, country);
   const note = document.getElementById("identity-note");
   const nameWrap = document.getElementById("name-wrap");
   if (!phone) {
     lastLookup = "";
     if (nameWrap) nameWrap.hidden = false;
-    if (note) note.textContent = "New predictors add a name and mobile once. If this number has predicted before, only the score is needed.";
+    if (note) {
+      note.hidden = true;
+      note.textContent = "";
+    }
     return;
   }
   if (phone === lastLookup) return;
   lastLookup = phone;
   const gen = ++lookupGen;
   try {
-    const res = await fetch("/api/user?phone=" + encodeURIComponent(raw), { cache: "no-store" });
+    const res = await fetch("/api/user?phone=" + encodeURIComponent(national) + "&country=" + encodeURIComponent(country), { cache: "no-store" });
     const data = await res.json();
     if (gen !== lookupGen) return;
     if (data.exists) {
@@ -265,7 +340,10 @@ async function lookupPhone(raw) {
       return;
     }
     if (nameWrap) nameWrap.hidden = false;
-    if (note) note.textContent = "New number. Add your name with this prediction. Next time, only the score.";
+    if (note) {
+      note.hidden = false;
+      note.textContent = "New number. Add your name with this prediction. Next time, only the score.";
+    }
   } catch {
     showBanner("Could not check that mobile number. You can still submit.");
   }
@@ -279,19 +357,19 @@ async function submitPrediction(matchId, button) {
   const kbfcScore = clamp(scores.kbfc);
   const opponentScore = clamp(scores.opp);
   const phone = state.user ? localStorage.getItem(STORAGE_KEY) || "" : currentPhone();
+  const countryCode = state.user ? "" : currentCountry();
   const name = state.user ? "" : currentName();
-  if (!state.user && !normalizePhone(phone)) {
-    showBanner("Enter a valid 10-digit mobile number before predicting.");
+  const member = state.user?.member || document.getElementById("whatsapp-member")?.checked === true;
+  if (!member) {
+    showBanner("Tick the box to confirm you are in the Manjappada Qatar WhatsApp group.");
+    document.getElementById("whatsapp-member")?.focus();
+    return;
+  }
+  if (!state.user && !normalizePhone(phone, countryCode)) {
+    showBanner("Only Qatar numbers can predict. Use +974 and an 8-digit mobile number.");
     document.getElementById("phone")?.focus();
     return;
   }
-  if (!pending || pending.matchId !== matchId || pending.kbfc !== kbfcScore || pending.opp !== opponentScore) {
-    pending = { matchId, kbfc: kbfcScore, opp: opponentScore };
-    button.textContent = `Tap again to lock ${kbfcScore}–${opponentScore}`;
-    showBanner(`Lock Kerala Blasters ${kbfcScore}–${opponentScore} ${match.shortName}? Tap the button again. This cannot be changed.`, "warn");
-    return;
-  }
-  pending = null;
   saving = true;
   button.disabled = true;
   showBanner("");
@@ -299,7 +377,7 @@ async function submitPrediction(matchId, button) {
     const res = await fetch("/api/predict", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ phone, name, matchId, kbfcScore, opponentScore }),
+      body: JSON.stringify({ phone, countryCode, name, matchId, kbfcScore, opponentScore, member: true }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -310,6 +388,8 @@ async function submitPrediction(matchId, button) {
     }
     localStorage.setItem(STORAGE_KEY, data.phone);
     identity.dataset.key = "";
+    editing[matchId] = false;
+    delete draftScores[matchId];
     saving = false;
     await load();
   } catch {
@@ -334,13 +414,22 @@ function currentPhone() {
   return field ? field.value : draftPhone;
 }
 
+function currentCountry() {
+  return "+974";
+}
+
 function currentName() {
   const field = document.getElementById("name");
   return field ? field.value : draftName;
 }
 
 function scoreOf(id) {
-  if (!draftScores[id]) draftScores[id] = { kbfc: "0", opp: "0" };
+  if (!draftScores[id]) {
+    const match = state?.matches?.find((item) => item.id === id);
+    draftScores[id] = match?.myPick
+      ? { kbfc: String(match.myPick.kbfcScore), opp: String(match.myPick.opponentScore) }
+      : { kbfc: "0", opp: "0" };
+  }
   return draftScores[id];
 }
 
@@ -355,15 +444,42 @@ function pointsLabel(pick) {
   return "0 points";
 }
 
-function countdown(match) {
-  if (match.status !== "open") return "";
-  const ms = new Date(match.kickoff).getTime() - Date.now();
-  if (ms <= 0) return " · closing";
-  const hours = Math.floor(ms / 3600000);
-  const minutes = Math.floor((ms % 3600000) / 60000);
-  if (hours > 72) return "";
-  if (hours > 0) return ` · closes in ${hours}h ${minutes}m`;
-  return ` · closes in ${minutes}m`;
+function timerBlock(match) {
+  return `
+    <div class="countdown">
+      <p class="timer" data-close="${esc(match.closesAt)}" aria-live="polite">
+        <b data-part="h">00</b><span>h</span>
+        <b data-part="m">00</b><span>m</span>
+        <b data-part="s">00</b><span>s</span>
+      </p>
+      <p>Predictions close at ${esc(match.closeLabel)} Qatar time</p>
+    </div>
+  `;
+}
+
+function startTimer() {
+  if (timerHandle) window.clearInterval(timerHandle);
+  const node = document.querySelector(".timer");
+  if (!node) return;
+  const tick = () => {
+    const ms = new Date(node.dataset.close).getTime() - Date.now();
+    if (ms <= 0) {
+      window.clearInterval(timerHandle);
+      timerHandle = 0;
+      load();
+      return;
+    }
+    const total = Math.floor(ms / 1000);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const seconds = total % 60;
+    const pad = (value) => String(value).padStart(2, "0");
+    node.querySelector("[data-part='h']").textContent = pad(hours);
+    node.querySelector("[data-part='m']").textContent = pad(minutes);
+    node.querySelector("[data-part='s']").textContent = pad(seconds);
+  };
+  tick();
+  timerHandle = window.setInterval(tick, 1000);
 }
 
 function clamp(value) {
@@ -373,11 +489,13 @@ function clamp(value) {
   return n;
 }
 
-function normalizePhone(raw) {
-  let digits = String(raw || "").replace(/\D/g, "");
-  if (digits.startsWith("91") && digits.length === 12) digits = digits.slice(2);
-  if (digits.startsWith("0") && digits.length === 11) digits = digits.slice(1);
-  return /^[6-9]\d{9}$/.test(digits) ? digits : "";
+function normalizePhone(raw, countryCode) {
+  const explicit = countryCode !== undefined && String(countryCode).trim() !== "";
+  if (explicit && String(countryCode).replace(/\D/g, "") !== "974") return "";
+  let digits = String(raw || "").replace(/\D/g, "").replace(/^0+/, "");
+  if (!digits) return "";
+  if (digits.startsWith("974") && digits.length === 11) digits = digits.slice(3);
+  return /^\d{8}$/.test(digits) ? "974" + digits : "";
 }
 
 function showBanner(text, tone) {

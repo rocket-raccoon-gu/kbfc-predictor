@@ -1,9 +1,13 @@
-export function normalizePhone(raw: string): string | null {
-  let digits = raw.replace(/\D/g, "");
-  if (digits.startsWith("91") && digits.length === 12) digits = digits.slice(2);
-  if (digits.startsWith("0") && digits.length === 11) digits = digits.slice(1);
-  if (!/^[6-9]\d{9}$/.test(digits)) return null;
-  return digits;
+/** Qatar mobile numbers only. The country code is locked to +974, and the national number is 8 digits. */
+export function normalizePhone(raw: string, countryCode?: string): string | null {
+  const explicit = countryCode !== undefined && countryCode.trim() !== "";
+  if (explicit && countryCode.replace(/\D/g, "") !== "974") return null;
+
+  let digits = raw.replace(/\D/g, "").replace(/^0+/, "");
+  if (!digits) return null;
+  if (digits.startsWith("974") && digits.length === 11) digits = digits.slice(3);
+  if (!/^\d{8}$/.test(digits)) return null;
+  return "974" + digits;
 }
 
 export function cleanName(raw: string): string | null {
