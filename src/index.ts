@@ -1,3 +1,4 @@
+import { closesAt, hasResult, nextMatchForBoard } from "./boards";
 import { pointsFor } from "./score";
 import { cleanName, maskPhone, normalizePhone, parseScore } from "./validate";
 
@@ -276,15 +277,17 @@ async function saveResult(env: Env, body: Record<string, unknown> | null): Promi
 
 async function buildBoards(env: Env, matches: MatchRow[], viewerPhone: string) {
   const finalMatches = matches.filter(hasResult);
-  const picks = finalMatches.length
+  const nextMatch = nextMatchForBoard(matches, finalMatches, Date.now());
+  const boardMatches = nextMatch ? [nextMatch, ...finalMatches] : finalMatches;
+  const picks = boardMatches.length
     ? await env.DB.prepare(
         `SELECT u.name AS name, u.phone AS phone, p.match_id AS match_id,
                 p.kbfc_score AS pk, p.opponent_score AS po
          FROM predictions p
          JOIN users u ON u.phone = p.phone
-         WHERE p.match_id IN (${finalMatches.map(() => "?").join(",")})`,
+         WHERE p.match_id IN (${boardMatches.map(() => "?").join(",")})`,
       )
-        .bind(...finalMatches.map((match) => match.id))
+        .bind(...boardMatches.map((match) => match.id))
         .all<PickRow>()
     : { results: [] as PickRow[] };
 
@@ -294,7 +297,7 @@ async function buildBoards(env: Env, matches: MatchRow[], viewerPhone: string) {
     phone: string;
     kbfcScore: number | null;
     opponentScore: number | null;
-    points: number;
+    points: number | null;
     exact: boolean;
     predicted: boolean;
   }>>();
@@ -303,23 +306,25 @@ async function buildBoards(env: Env, matches: MatchRow[], viewerPhone: string) {
   for (const user of everyone.results) {
     season.set(user.phone, { name: user.name, phone: user.phone, points: 0, exact: 0, played: 0 });
   }
-  for (const match of finalMatches) rowsByMatch.set(match.id, []);
-  const matchById = new Map(finalMatches.map((match) => [match.id, match]));
+  for (const match of boardMatches) rowsByMatch.set(match.id, []);
+  const matchById = new Map(boardMatches.map((match) => [match.id, match]));
 
   for (const pick of picks.results) {
     const match = matchById.get(pick.match_id);
     if (!match) continue;
-    const scored = pointsFor(
-      { kbfc: pick.pk, opponent: pick.po },
-      { kbfc: match.kbfc_score as number, opponent: match.opponent_score as number },
-    );
-    const agg = season.get(pick.phone) ?? { name: pick.name, phone: pick.phone, points: 0, exact: 0, played: 0 };
-    agg.points += scored.points;
-    agg.exact += scored.exact ? 1 : 0;
-    agg.played += 1;
-    season.set(pick.phone, agg);
     const board = rowsByMatch.get(pick.match_id);
-    if (board) {
+    if (!board) continue;
+
+    if (hasResult(match)) {
+      const scored = pointsFor(
+        { kbfc: pick.pk, opponent: pick.po },
+        { kbfc: match.kbfc_score as number, opponent: match.opponent_score as number },
+      );
+      const agg = season.get(pick.phone) ?? { name: pick.name, phone: pick.phone, points: 0, exact: 0, played: 0 };
+      agg.points += scored.points;
+      agg.exact += scored.exact ? 1 : 0;
+      agg.played += 1;
+      season.set(pick.phone, agg);
       board.push({
         name: pick.name,
         phone: pick.phone,
@@ -327,6 +332,16 @@ async function buildBoards(env: Env, matches: MatchRow[], viewerPhone: string) {
         opponentScore: pick.po,
         points: scored.points,
         exact: scored.exact,
+        predicted: true,
+      });
+    } else {
+      board.push({
+        name: pick.name,
+        phone: pick.phone,
+        kbfcScore: pick.pk,
+        opponentScore: pick.po,
+        points: null,
+        exact: false,
         predicted: true,
       });
     }
@@ -367,9 +382,13 @@ async function buildBoards(env: Env, matches: MatchRow[], viewerPhone: string) {
         .map(({ kickoff: _kickoff, ...pick }) => pick),
     }));
 
-  const matchBoards = finalMatches.map((match) => {
+  const matchBoards = boardMatches.map((match) => {
+    const pending = !hasResult(match);
     const rows = (rowsByMatch.get(match.id) ?? [])
-      .sort((a, b) => b.points - a.points || Number(b.predicted) - Number(a.predicted) || a.name.localeCompare(b.name))
+      .sort((a, b) => {
+        if (pending) return a.name.localeCompare(b.name);
+        return (b.points ?? 0) - (a.points ?? 0) || Number(b.predicted) - Number(a.predicted) || a.name.localeCompare(b.name);
+      })
       .map((row, index) => ({
         rank: index + 1,
         name: row.name,
@@ -389,6 +408,7 @@ async function buildBoards(env: Env, matches: MatchRow[], viewerPhone: string) {
       opponentScore: match.opponent_score,
       home: match.is_home === 1,
       opponent: match.opponent,
+      pending,
       rows,
     };
   });
@@ -413,16 +433,6 @@ async function markMember(env: Env, phone: string): Promise<void> {
 
 function isChecked(value: unknown): boolean {
   return value === true || value === 1 || value === "1" || value === "true";
-}
-
-function hasResult(match: MatchRow): boolean {
-  return match.kbfc_score !== null && match.opponent_score !== null;
-}
-
-const PREDICT_CUTOFF_MS = 60 * 1000;
-
-function closesAt(kickoff: string): number {
-  return Date.parse(kickoff) - PREDICT_CUTOFF_MS;
 }
 
 function matchStatus(match: MatchRow, matches: MatchRow[], now: number): "final" | "locked" | "open" | "upcoming" {
