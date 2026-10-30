@@ -2,7 +2,7 @@ const STORAGE_KEY = "kbfc-phone";
 
 let state = null;
 let tab = "matches";
-let showMatchBoards = false;
+let showMatchBoards = true;
 const openPicks = new Set();
 let draftPhone = "";
 let draftCountry = "+974";
@@ -217,16 +217,19 @@ function renderBoard() {
             <span class="rank">${row.rank}</span>
             <span>${esc(row.name)}<span class="phone-tail">···${esc(row.phoneEnd)}</span><span class="pick-line">${row.predicted ? `Blasters ${row.kbfcScore}–${row.opponentScore} ${esc(board.opponent)}` : "No prediction"}</span></span>
             <span></span>
-            <span class="pts">${row.points}</span>
+            <span class="pts">${row.points == null ? "—" : row.points}</span>
           </div>
         `).join("")
-      : `<p class="empty">Nobody predicted this match.</p>`;
+      : `<p class="empty">${board.pending ? "No predictions yet for this match." : "Nobody predicted this match."}</p>`;
+    const resultLine = board.pending
+      ? `${esc(board.kickoffLabel)} · Predictions in`
+      : `${esc(board.kickoffLabel)} · Blasters ${board.kbfcScore}–${board.opponentScore} ${esc(board.opponent)}`;
     return `
       <section class="card">
         <div class="board-title">
           <h2>${esc(board.fixture)}</h2>
         </div>
-        <p class="when">${esc(board.kickoffLabel)} · Blasters ${board.kbfcScore}–${board.opponentScore} ${esc(board.opponent)}</p>
+        <p class="when">${resultLine}</p>
         ${rows}
       </section>
     `;
