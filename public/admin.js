@@ -25,7 +25,12 @@ async function load() {
     return;
   }
   lock.hidden = true;
-  app.innerHTML = renderAnalytics(data.analytics) + data.matches.map(renderMatch).join("");
+  const finished = data.matches.filter((match) => match.kbfcScore != null && match.opponentScore != null);
+  const upcoming = data.matches.filter((match) => match.kbfcScore == null || match.opponentScore == null);
+  app.innerHTML =
+    renderAnalytics(data.analytics) +
+    renderFinished(finished) +
+    renderUpcoming(upcoming);
 }
 
 function renderAnalytics(analytics) {
@@ -45,7 +50,7 @@ function renderAnalytics(analytics) {
           )
           .join("")}
       </div>`
-    : `<p class="muted">Season points appear here after full-time scores are saved.</p>`;
+    : `<p class="muted">Season points appear here after full-time scores are in.</p>`;
 
   return `
     <section class="card admin-analytics">
@@ -65,36 +70,67 @@ function renderAnalytics(analytics) {
   `;
 }
 
-function renderMatch(match) {
-  const kbfc = match.kbfcScore ?? "";
-  const opponent = match.opponentScore ?? "";
-  const scored =
-    match.exact != null
-      ? `<p class="venue">${match.exact} exact · ${match.correct} correct result · ${match.pointsAwarded} pts awarded</p>`
-      : "";
+function renderFinished(matches) {
+  if (!matches.length) {
+    return `
+      <section class="card">
+        <div class="board-title"><h2>Finished matches</h2></div>
+        <p class="muted">No full-time scores yet.</p>
+      </section>
+    `;
+  }
   return `
-    <article class="card">
+    <section class="card admin-results">
+      <div class="board-title"><h2>Finished matches</h2></div>
+      <div class="admin-result-list">
+        ${matches.map(renderFinishedMatch).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderFinishedMatch(match) {
+  return `
+    <article class="admin-result-row">
       <div class="match-top">
-        <span class="pill ${match.status}">${esc(match.status)}</span>
+        <span class="pill final">final</span>
         <span class="when">${match.picks} predictions</span>
       </div>
-      <h2 class="fixture">${esc(match.fixture)}</h2>
+      <h3 class="fixture">${esc(match.fixture)}</h3>
       <p class="venue">${esc(match.kickoffLabel)} · ${esc(match.venue)}</p>
-      ${scored}
-      <div class="admin-row">
-        <label>Blasters
-          <input data-role="kbfc" data-match="${esc(match.id)}" inputmode="numeric" value="${esc(kbfc)}" />
-        </label>
-        <label>Opponent
-          <input data-role="opp" data-match="${esc(match.id)}" inputmode="numeric" value="${esc(opponent)}" />
-        </label>
-      </div>
+      <p class="admin-ft">Blasters <b>${esc(match.kbfcScore)}–${esc(match.opponentScore)}</b></p>
+      <p class="venue">${match.exact ?? 0} exact · ${match.correct ?? 0} correct result · ${match.pointsAwarded ?? 0} pts awarded</p>
       <div class="admin-actions">
-        <button type="button" class="btn" data-action="save" data-match="${esc(match.id)}">Save result</button>
-        <button type="button" class="ghost" data-action="clear" data-match="${esc(match.id)}">Clear result</button>
         <button type="button" class="ghost" data-action="export-match" data-match="${esc(match.id)}">Export CSV</button>
       </div>
     </article>
+  `;
+}
+
+function renderUpcoming(matches) {
+  if (!matches.length) return "";
+  return `
+    <section class="card">
+      <div class="board-title"><h2>Upcoming / awaiting result</h2></div>
+      ${matches
+        .map(
+          (match) => `
+        <article class="admin-result-row">
+          <div class="match-top">
+            <span class="pill ${esc(match.status)}">${esc(match.status)}</span>
+            <span class="when">${match.picks} predictions</span>
+          </div>
+          <h3 class="fixture">${esc(match.fixture)}</h3>
+          <p class="venue">${esc(match.kickoffLabel)} · ${esc(match.venue)}</p>
+          <p class="muted">Full-time score not entered yet.</p>
+          <div class="admin-actions">
+            <button type="button" class="ghost" data-action="export-match" data-match="${esc(match.id)}">Export CSV</button>
+          </div>
+        </article>
+      `,
+        )
+        .join("")}
+    </section>
   `;
 }
 
@@ -110,22 +146,7 @@ app.addEventListener("click", async (event) => {
   }
   if (action === "export-match") {
     await downloadExport(matchId);
-    return;
   }
-  if (action === "clear") {
-    if (!window.confirm("Remove the full-time score for this match?")) return;
-    await send({ matchId, clear: true }, button);
-    return;
-  }
-  if (action !== "save") return;
-
-  const kbfc = valueFor(matchId, "kbfc").trim();
-  const opp = valueFor(matchId, "opp").trim();
-  if (kbfc === "" || opp === "") {
-    showBanner("Enter the Blasters score and the opponent score.");
-    return;
-  }
-  await send({ matchId, kbfcScore: Number(kbfc), opponentScore: Number(opp) }, button);
 });
 
 async function downloadExport(matchId) {
@@ -156,32 +177,6 @@ async function downloadExport(matchId) {
   } catch {
     showBanner("Could not export.");
   }
-}
-
-async function send(body, button) {
-  button.disabled = true;
-  showBanner("");
-  try {
-    const res = await fetch("/api/admin/result", {
-      method: "POST",
-      headers: { "content-type": "application/json", ...pinHeaders() },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      showBanner(data.error || "Could not save the result.");
-      button.disabled = false;
-      return;
-    }
-    await load();
-  } catch {
-    button.disabled = false;
-    showBanner("Could not save the result.");
-  }
-}
-
-function valueFor(matchId, role) {
-  return app.querySelector(`[data-role="${role}"][data-match="${CSS.escape(matchId)}"]`)?.value ?? "";
 }
 
 function pinHeaders() {

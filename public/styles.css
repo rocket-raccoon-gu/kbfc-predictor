@@ -545,6 +545,40 @@ button.lb-row {
 
 .admin-export-note { margin-top: 14px; font-size: 13px; }
 
+.admin-results .admin-result-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.admin-result-row {
+  padding: 12px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.admin-result-row:first-child { border-top: 0; padding-top: 0; }
+
+.admin-result-row .fixture {
+  margin: 8px 0 4px;
+  font-size: 22px;
+}
+
+.admin-ft {
+  margin: 8px 0 4px;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.admin-ft b {
+  color: var(--yellow-2);
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 28px;
+  letter-spacing: 0.02em;
+}
+
+.admin-result-row .admin-actions { margin-top: 4px; }
+.admin-result-row .admin-actions .ghost { margin-top: 8px; }
+
 @media (max-width: 640px) {
   .admin-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .admin-top .lb-row {
