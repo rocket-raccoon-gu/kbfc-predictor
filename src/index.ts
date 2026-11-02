@@ -80,7 +80,12 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   if (url.pathname === "/api/admin/matches" && request.method === "GET") {
     const denied = assertPin(request, env);
     if (denied) return denied;
-    return adminMatches(env);
+    return adminDashboard(env);
+  }
+  if (url.pathname === "/api/admin/export" && request.method === "GET") {
+    const denied = assertPin(request, env);
+    if (denied) return denied;
+    return adminExport(env, url.searchParams.get("matchId") ?? "");
   }
   if (url.pathname === "/api/admin/result" && request.method === "POST") {
     const denied = assertPin(request, env);
@@ -229,25 +234,218 @@ async function predict(env: Env, body: Record<string, unknown> | null): Promise<
   return json({ ok: true, name, phone, phoneMask: maskPhone(phone) });
 }
 
-async function adminMatches(env: Env): Promise<Response> {
+async function adminDashboard(env: Env): Promise<Response> {
   const matches = await listMatches(env);
+  const now = Date.now();
+  const users = await env.DB.prepare("SELECT COUNT(*) AS n FROM users").first<{ n: number }>();
+  const predictionCount = await env.DB.prepare("SELECT COUNT(*) AS n FROM predictions").first<{ n: number }>();
   const counts = await env.DB.prepare(
     "SELECT match_id, COUNT(*) AS picks FROM predictions GROUP BY match_id",
   ).all<{ match_id: string; picks: number }>();
   const byId = new Map(counts.results.map((row) => [row.match_id, row.picks]));
-  const now = Date.now();
+
+  const scored = matches.filter(hasResult);
+  const pickStats = new Map<string, { exact: number; correct: number; points: number }>();
+  const season = new Map<string, { name: string; phone: string; points: number; exact: number; played: number }>();
+
+  if (scored.length) {
+    const picks = await env.DB.prepare(
+      `SELECT u.name AS name, u.phone AS phone, p.match_id AS match_id,
+              p.kbfc_score AS pk, p.opponent_score AS po
+       FROM predictions p
+       JOIN users u ON u.phone = p.phone
+       WHERE p.match_id IN (${scored.map(() => "?").join(",")})`,
+    )
+      .bind(...scored.map((match) => match.id))
+      .all<PickRow>();
+    const matchById = new Map(scored.map((match) => [match.id, match]));
+    for (const match of scored) pickStats.set(match.id, { exact: 0, correct: 0, points: 0 });
+    for (const pick of picks.results) {
+      const match = matchById.get(pick.match_id);
+      if (!match) continue;
+      const result = pointsFor(
+        { kbfc: pick.pk, opponent: pick.po },
+        { kbfc: match.kbfc_score as number, opponent: match.opponent_score as number },
+      );
+      const stats = pickStats.get(pick.match_id)!;
+      if (result.exact) stats.exact += 1;
+      if (result.correct) stats.correct += 1;
+      stats.points += result.points;
+      const agg = season.get(pick.phone) ?? {
+        name: pick.name,
+        phone: pick.phone,
+        points: 0,
+        exact: 0,
+        played: 0,
+      };
+      agg.points += result.points;
+      agg.exact += result.exact ? 1 : 0;
+      agg.played += 1;
+      season.set(pick.phone, agg);
+    }
+  }
+
+  const leaderboard = [...season.values()]
+    .sort((a, b) => b.points - a.points || b.exact - a.exact || a.name.localeCompare(b.name))
+    .slice(0, 10)
+    .map((row, index) => ({
+      rank: index + 1,
+      name: row.name,
+      phone: row.phone,
+      points: row.points,
+      exact: row.exact,
+      played: row.played,
+    }));
+
   return json({
-    matches: matches.map((match) => ({
-      id: match.id,
-      fixture: fixtureName(match),
-      venue: match.venue,
-      kickoffLabel: formatKickoff(match.kickoff),
-      status: matchStatus(match, matches, now),
-      kbfcScore: match.kbfc_score,
-      opponentScore: match.opponent_score,
-      picks: byId.get(match.id) ?? 0,
-    })),
+    analytics: {
+      users: users?.n ?? 0,
+      predictions: predictionCount?.n ?? 0,
+      matchesWithResult: scored.length,
+      matchesOpen: matches.filter((match) => matchStatus(match, matches, now) === "open").length,
+      topPredictors: leaderboard,
+    },
+    matches: matches.map((match) => {
+      const stats = pickStats.get(match.id);
+      return {
+        id: match.id,
+        fixture: fixtureName(match),
+        venue: match.venue,
+        kickoffLabel: formatKickoff(match.kickoff),
+        status: matchStatus(match, matches, now),
+        kbfcScore: match.kbfc_score,
+        opponentScore: match.opponent_score,
+        picks: byId.get(match.id) ?? 0,
+        exact: stats?.exact ?? null,
+        correct: stats?.correct ?? null,
+        pointsAwarded: stats?.points ?? null,
+      };
+    }),
   });
+}
+
+async function adminExport(env: Env, rawMatchId: string): Promise<Response> {
+  const matches = await listMatches(env);
+  const matchFilter = rawMatchId.trim();
+  if (matchFilter && !/^[a-z0-9-]{1,40}$/.test(matchFilter)) return err(400, "Unknown match.");
+  const selected = matchFilter ? matches.filter((match) => match.id === matchFilter) : matches;
+  if (matchFilter && !selected.length) return err(404, "That match is not on the list.");
+
+  const picks = selected.length
+    ? await env.DB.prepare(
+        `SELECT u.name AS name, u.phone AS phone, p.match_id AS match_id,
+                p.kbfc_score AS pk, p.opponent_score AS po, p.created_at AS created_at
+         FROM predictions p
+         JOIN users u ON u.phone = p.phone
+         WHERE p.match_id IN (${selected.map(() => "?").join(",")})
+         ORDER BY p.match_id ASC, u.name COLLATE NOCASE ASC`,
+      )
+        .bind(...selected.map((match) => match.id))
+        .all<PickRow & { created_at: string }>()
+    : { results: [] as Array<PickRow & { created_at: string }> };
+
+  const matchById = new Map(selected.map((match) => [match.id, match]));
+  const header = [
+    "rank",
+    "name",
+    "phone",
+    "match_id",
+    "fixture",
+    "kickoff",
+    "predicted_kbfc",
+    "predicted_opponent",
+    "actual_kbfc",
+    "actual_opponent",
+    "points",
+    "exact",
+    "correct",
+    "predicted_at",
+  ];
+
+  type ExportRow = {
+    matchId: string;
+    name: string;
+    phone: string;
+    pk: number;
+    po: number;
+    points: number | "";
+    exact: string;
+    correct: string;
+    createdAt: string;
+  };
+
+  const byMatch = new Map<string, ExportRow[]>();
+  for (const pick of picks.results) {
+    const match = matchById.get(pick.match_id);
+    if (!match) continue;
+    const final = hasResult(match);
+    const scored = final
+      ? pointsFor(
+          { kbfc: pick.pk, opponent: pick.po },
+          { kbfc: match.kbfc_score as number, opponent: match.opponent_score as number },
+        )
+      : null;
+    const list = byMatch.get(pick.match_id) ?? [];
+    list.push({
+      matchId: pick.match_id,
+      name: pick.name,
+      phone: pick.phone,
+      pk: pick.pk,
+      po: pick.po,
+      points: scored ? scored.points : "",
+      exact: scored ? (scored.exact ? "yes" : "no") : "",
+      correct: scored ? (scored.correct ? "yes" : "no") : "",
+      createdAt: pick.created_at,
+    });
+    byMatch.set(pick.match_id, list);
+  }
+
+  const lines = [header.join(",")];
+  for (const match of selected) {
+    const rows = (byMatch.get(match.id) ?? []).sort((a, b) => {
+      const ap = typeof a.points === "number" ? a.points : -1;
+      const bp = typeof b.points === "number" ? b.points : -1;
+      return bp - ap || a.name.localeCompare(b.name);
+    });
+    rows.forEach((row, index) => {
+      lines.push(
+        [
+          index + 1,
+          csvCell(row.name),
+          csvCell(row.phone),
+          csvCell(match.id),
+          csvCell(fixtureName(match)),
+          csvCell(match.kickoff),
+          row.pk,
+          row.po,
+          match.kbfc_score ?? "",
+          match.opponent_score ?? "",
+          row.points,
+          row.exact,
+          row.correct,
+          csvCell(row.createdAt),
+        ].join(","),
+      );
+    });
+  }
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  const filename = matchFilter
+    ? `kbfc-${matchFilter}-${stamp}.csv`
+    : `kbfc-all-predictions-${stamp}.csv`;
+  return new Response(lines.join("\n") + "\n", {
+    status: 200,
+    headers: {
+      "content-type": "text/csv; charset=utf-8",
+      "content-disposition": `attachment; filename="${filename}"`,
+      "cache-control": "no-store",
+    },
+  });
+}
+
+function csvCell(value: string): string {
+  if (/[",\n\r]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
 }
 
 async function saveResult(env: Env, body: Record<string, unknown> | null): Promise<Response> {
